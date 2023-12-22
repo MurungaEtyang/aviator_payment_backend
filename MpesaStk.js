@@ -5,6 +5,7 @@ import cors from 'cors';
 import sqlite3 from 'sqlite3';
 import cron from 'node-cron';
 
+const paymentAmount = 100;
 const app = express();
 const port = 8080;
 
@@ -13,7 +14,7 @@ app.use(bodyParser.json());
 
 app.use(cors());
 
-const db = new sqlite3.Database('transactions3.db');
+const db = new sqlite3.Database('transactions255.db');
 
 // Create the transactions table if it doesn't exist
 db.run(`
@@ -47,9 +48,15 @@ const saveTransaction = async (data) => {
 };
 
 // Function to check if a phone number is in the database
-const isPhoneNumberInDatabase = async (phoneNumber) => {
+const isPhoneNumberAndAmountInDatabase = async (phoneNumber, amount) => {
     return new Promise((resolve, reject) => {
-        db.get('SELECT * FROM transactions WHERE phoneNumber = ?', [phoneNumber], (err, row) => {
+        const sql = 'SELECT * FROM transactions WHERE phoneNumber = ? AND amount = ?';
+        const params = [phoneNumber, amount];
+
+        console.log('SQL Query:', sql);
+        console.log('SQL Parameters:', params);
+
+        db.get(sql, params, (err, row) => {
             if (err) {
                 reject(err.message);
             } else {
@@ -58,6 +65,8 @@ const isPhoneNumberInDatabase = async (phoneNumber) => {
         });
     });
 };
+
+
 
 // Function to delete person's saved data after 24 hours
 const deleteOldData = async () => {
@@ -76,13 +85,12 @@ const deleteOldData = async () => {
 // Schedule the task to delete old data every day at midnight
 cron.schedule('0 0 * * *', deleteOldData);
 
-const tinyApi = async (phoneNumber, amount) => {
+const MpesaStkPush = async (phoneNumber, amount) => {
     const urlInitialize = "https://tinypesa.com/api/v1/express/initialize";
     const urlGetStatus = "https://tinypesa.com/api/v1/express/get_status/";
 
     const accno = Math.floor(Math.random() * 1000) + 1;
     const apiKey = "cdcbi5kqWqq";
-    const stkPushAmount = 1
 
     const saveResponse = async (data) => {
         db.run(
@@ -113,7 +121,7 @@ const tinyApi = async (phoneNumber, amount) => {
         }
 
         let isTransactionComplete = false;
-        await new Promise(resolve => setTimeout(resolve, 30000));
+        await new Promise(resolve => setTimeout(resolve, 40000));
 
         while (!isTransactionComplete) {
             const getStatusResponse = await fetch(urlGetStatus + accno.toString(), {
@@ -171,36 +179,53 @@ app.post('/api/stk-push', async (req, res) => {
     const { phoneNumber, amount } = req.body;
 
     try {
-        // Check if the phone number is in the database
-        const isPhoneNumberExists = await isPhoneNumberInDatabase(phoneNumber);
+        // Check if the phone number is in the database and the transaction is still valid
+        const isPhoneNumberExists = await isPhoneNumberAndAmountInDatabase(phoneNumber, amount);
 
-        if (isPhoneNumberExists) {
-            // Return an error response if the phone number is already in the database
-            res.status(200).json({ message: `true` });
+        if (!isPhoneNumberExists) {
+
+            const result = await MpesaStkPush(phoneNumber, amount);
+
+            if (result.success) {
+                await saveTransaction({
+                    phoneNumber,
+                    amount,
+                    sync_status: result.response.message,
+                    created_at: result.created_at,
+                    mpesa_receipt: result.mpesa_receipt,
+                });
+
+                res.json({ success: true, message: result.response.message });
+            } else {
+                res.status(400).json({ error: result.error });
+            }
         } else {
-            // Proceed with the transaction
-            const result = await tinyApi(phoneNumber, amount);
-            res.json(result);
+            res.status(210).json({ paid: 'Phone number and amount already exist' });
         }
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
+
+
+
+
 // Endpoint to get a random number
-app.get('/api/aviatorNumber', (req, res) => {
+await new Promise(resolve => setTimeout(resolve, 20000));
+app.get('/api/aviatorNumber', async (req, res) => {
     const randomNumber = Math.floor(Math.random() * 10) + 1;
-    res.json({ number: randomNumber });
+    res.json({number: randomNumber});
 });
 
 app.get('/api/amount', (req, res) => {
-    const amount = 10;
+    const amount = paymentAmount;
     res.json({amount: amount});
 });
 
 // Start the server
-app.listen(port, () => {
-    console.log(`Server started on port ${port}`);
-});
+// app.listen(port, () => {
+//     console.log(`Server started on port ${port}`);
+// });
 
-export default tinyApi;
+export default MpesaStkPush;
