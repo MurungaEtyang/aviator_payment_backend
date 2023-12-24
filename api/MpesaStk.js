@@ -4,19 +4,19 @@ import bodyParser from 'body-parser';
 import cors from 'cors';
 import sqlite3 from 'sqlite3';
 import cron from 'node-cron';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 
-const paymentAmount = 100;
+const paymentAmount = 10;
 const app = express();
-const port = 8080;
+const port = 8000;
 
+// Middleware
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
-
 app.use(cors());
 
-const db = new sqlite3.Database('transactions255.db');
-
-// Create the transactions table if it doesn't exist
+// SQLite Database Initialization
+const db = new sqlite3.Database('transactions.db');
 db.run(`
   CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +39,7 @@ const saveTransaction = async (data) => {
                     console.error('Error saving transaction:', err.message);
                     reject(err.message);
                 } else {
-                    console.log('Transaction saved to database');
+                    console.log('Transaction saved to the database');
                     resolve();
                 }
             }
@@ -66,9 +66,7 @@ const isPhoneNumberAndAmountInDatabase = async (phoneNumber, amount) => {
     });
 };
 
-
-
-// Function to delete person's saved data after 24 hours
+// Function to delete old data from the database
 const deleteOldData = async () => {
     const twentyFourHoursAgo = new Date();
     twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
@@ -85,6 +83,7 @@ const deleteOldData = async () => {
 // Schedule the task to delete old data every day at midnight
 cron.schedule('0 0 * * *', deleteOldData);
 
+// Function to handle MPesa STK push
 const MpesaStkPush = async (phoneNumber, amount) => {
     const urlInitialize = "https://tinypesa.com/api/v1/express/initialize";
     const urlGetStatus = "https://tinypesa.com/api/v1/express/get_status/";
@@ -92,21 +91,8 @@ const MpesaStkPush = async (phoneNumber, amount) => {
     const accno = Math.floor(Math.random() * 1000) + 1;
     const apiKey = "cdcbi5kqWqq";
 
-    const saveResponse = async (data) => {
-        db.run(
-            'INSERT INTO transactions (phoneNumber, amount, sync_status, created_at, mpesa_receipt) VALUES (?, ?, ?, ?, ?)',
-            [data.phoneNumber, data.amount, data.sync_status, data.created_at, data.mpesa_receipt],
-            (err) => {
-                if (err) {
-                    console.error('Error saving transaction:', err.message);
-                } else {
-                    console.log('Transaction saved to database');
-                }
-            }
-        );
-    };
-
     try {
+        // Initialize transaction
         const initializeResponse = await fetch(urlInitialize, {
             method: "POST",
             headers: {
@@ -120,10 +106,12 @@ const MpesaStkPush = async (phoneNumber, amount) => {
             throw new Error("Failed to initialize transaction");
         }
 
+        // Wait for transaction to complete
         let isTransactionComplete = false;
         await new Promise(resolve => setTimeout(resolve, 40000));
 
         while (!isTransactionComplete) {
+            // Check transaction status
             const getStatusResponse = await fetch(urlGetStatus + accno.toString(), {
                 method: "GET",
                 headers: {
@@ -140,6 +128,7 @@ const MpesaStkPush = async (phoneNumber, amount) => {
             const statusResponseBody = await getStatusResponse.json();
 
             if (statusResponseBody.mpesa_receipt != null) {
+                // Save transaction data to the database
                 await saveTransaction({
                     phoneNumber,
                     amount,
@@ -148,7 +137,7 @@ const MpesaStkPush = async (phoneNumber, amount) => {
                     mpesa_receipt: statusResponseBody.mpesa_receipt,
                 });
 
-                console.log('Transaction saved to database');
+                console.log('Transaction saved to the database');
                 return;
             } else {
                 console.log(statusResponseBody);
@@ -175,6 +164,7 @@ const MpesaStkPush = async (phoneNumber, amount) => {
     }
 };
 
+// Endpoint to handle MPesa STK push
 app.post('/api/stk-push', async (req, res) => {
     const { phoneNumber, amount } = req.body;
 
@@ -183,10 +173,11 @@ app.post('/api/stk-push', async (req, res) => {
         const isPhoneNumberExists = await isPhoneNumberAndAmountInDatabase(phoneNumber, amount);
 
         if (!isPhoneNumberExists) {
-
+            // Initiate MPesa STK push transaction
             const result = await MpesaStkPush(phoneNumber, amount);
 
             if (result.success) {
+                // Save transaction data to the database
                 await saveTransaction({
                     phoneNumber,
                     amount,
@@ -207,25 +198,27 @@ app.post('/api/stk-push', async (req, res) => {
     }
 });
 
-
-
-
-
 // Endpoint to get a random number
-await new Promise(resolve => setTimeout(resolve, 20000));
 app.get('/api/aviatorNumber', async (req, res) => {
     const randomNumber = Math.floor(Math.random() * 10) + 1;
-    res.json({number: randomNumber});
+    res.json({ number: randomNumber });
 });
 
+// Endpoint to get payment amount
 app.get('/api/amount', (req, res) => {
     const amount = paymentAmount;
-    res.json({amount: amount});
+    res.json({ amount: amount });
 });
+
+// Proxy API requests to the local development server
+app.use('/api', createProxyMiddleware({
+    target: 'http://192.168.43.76:8000',
+    changeOrigin: true,
+}));
 
 // Start the server
 // app.listen(port, () => {
-//     console.log(`Server started on port ${port}`);
+//     console.log(`Server started on port http://192.168.43.76:${port}`);
 // });
 
 export default MpesaStkPush;
